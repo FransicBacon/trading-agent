@@ -3,11 +3,13 @@ Production-ready automated stock trading agent.
 Strategy: Multi-Indicator Momentum with Groq AI confirmation.
 Broker: Alpaca Paper Trading (alpaca-py).
 Logging & learning: Supabase.
+Notifications: Telegram.
 """
 
 import os
 import json
 import datetime
+import requests
 import numpy as np
 import pandas as pd
 import ta
@@ -64,6 +66,24 @@ def get_supabase_client() -> SupabaseClient:
 
 def market_is_open(client: TradingClient) -> bool:
     return client.get_clock().is_open
+
+
+# ── Telegram notifications ────────────────────────────────────────────────────
+
+def send_telegram(message: str) -> None:
+    """Send a message via Telegram Bot API. Silently skips if env vars missing."""
+    token   = os.environ.get("TELEGRAM_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": message},
+            timeout=10,
+        )
+    except Exception as exc:
+        print(f"  [telegram error] {exc}")
 
 
 # ── Supabase trade logging ─────────────────────────────────────────────────────
@@ -530,6 +550,7 @@ def print_weekly_summary(groq_client: Groq, sb: SupabaseClient) -> None:
 
     if not trades:
         print("\n=== WEEKLY REPORT ===\nNo closed trades this week.\n====================")
+        send_telegram("📈 WEEKLY REPORT\nNo closed trades this week.")
         return
 
     stats        = build_performance_stats(trades)
@@ -573,6 +594,12 @@ def print_weekly_summary(groq_client: Groq, sb: SupabaseClient) -> None:
         f"Best score level: {best_score_lvl}/6 ({best_score_wr}% win rate)\n"
         f"Recommendation: {recommendation}\n"
         f"{'='*55}"
+    )
+    send_telegram(
+        f"📈 WEEKLY REPORT\n"
+        f"Trades: {total} | Win Rate: {win_rate}%\n"
+        f"Best: {best_sym or 'N/A'} | Worst: {worst_sym or 'N/A'}\n"
+        f"{recommendation}"
     )
 
 
@@ -657,8 +684,19 @@ def run():
                 success = close_position(trading_client, symbol)
                 if success:
                     sells_executed += 1
+                    pnl     = round((ind["price"] - entry_price) * float(position.qty), 2)
+                    pnl_pct = round((ind["price"] - entry_price) / entry_price * 100, 2)
+                    result  = "WIN" if pnl > 0 else "LOSS"
                     print(f"[{symbol}] SELL | {reason} | Price: ${ind['price']:.2f}")
                     update_sell_trade(sb, symbol, ind["price"])
+                    send_telegram(
+                        f"🔴 SOLD {symbol}\n"
+                        f"Exit: ${ind['price']:.2f}\n"
+                        f"PnL: ${pnl} ({pnl_pct}%)\n"
+                        f"Result: {result}\n"
+                        f"Reason: {reason}\n"
+                        f"Portfolio: ${portfolio_value:,.2f}"
+                    )
         except Exception as exc:
             print(f"[{symbol}] sell-check error: {exc}")
 
@@ -753,16 +791,25 @@ def run():
                 )
                 save_buy_trade(
                     sb,
-                    symbol      = symbol,
-                    price       = ind["price"],
-                    shares      = qty,
-                    score       = score,
-                    rsi         = ind["rsi"],
-                    adx         = ind["adx"],
+                    symbol        = symbol,
+                    price         = ind["price"],
+                    shares        = qty,
+                    score         = score,
+                    rsi           = ind["rsi"],
+                    adx           = ind["adx"],
                     groq_decision = decision,
-                    groq_conf   = confidence,
-                    reason      = reason,
-                    portfolio   = portfolio_value,
+                    groq_conf     = confidence,
+                    reason        = reason,
+                    portfolio     = portfolio_value,
+                )
+                send_telegram(
+                    f"🟢 BUY {symbol}\n"
+                    f"Price: ${ind['price']:.2f}\n"
+                    f"Shares: {qty}\n"
+                    f"Stop-Loss: ${stop_loss:.2f}\n"
+                    f"Take-Profit: ${take_profit:.2f}\n"
+                    f"Score: {score}/6 | Groq: {confidence}%\n"
+                    f"Portfolio: ${portfolio_value:,.2f}"
                 )
             else:
                 skipped += 1
@@ -782,6 +829,12 @@ def run():
         f"=== RUN COMPLETE | Buys:{buys_executed} | Sells:{sells_executed} | "
         f"Skipped:{skipped} | Portfolio:${portfolio_value:,.2f} ===\n"
         f"{'='*60}"
+    )
+    scan_time = datetime.datetime.utcnow().strftime("%H:%M UTC")
+    send_telegram(
+        f"📊 SCAN COMPLETE {scan_time}\n"
+        f"Buys: {buys_executed} | Sells: {sells_executed} | Skipped: {skipped}\n"
+        f"Portfolio: ${portfolio_value:,.2f}"
     )
 
     # ── Weekly report (Fridays only) ──────────────────────────────────────
