@@ -643,6 +643,8 @@ def run():
     groq_client    = get_groq_client()
     sb             = get_supabase_client()
 
+    send_telegram("🤖 Agent started - testing Telegram connection")
+
     # Market-hours check
     if not market_is_open(trading_client):
         print("Market closed, exiting.")
