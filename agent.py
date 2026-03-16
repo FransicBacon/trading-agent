@@ -9,7 +9,7 @@ import json
 import datetime
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
+import ta
 import yfinance as yf
 
 from groq import Groq
@@ -84,22 +84,29 @@ def calculate_indicators(df: pd.DataFrame) -> dict | None:
         volume = df["volume"]
 
         # RSI(14)
-        rsi_series = ta.rsi(close, length=14)
+        rsi_series = ta.momentum.RSIIndicator(close=close, window=14).rsi()
 
         # MACD(12,26,9)
-        macd_df = ta.macd(close, fast=12, slow=26, signal=9)
+        macd_obj  = ta.trend.MACD(close=close, window_slow=26, window_fast=12, window_sign=9)
+        macd_line = macd_obj.macd()
+        signal_line = macd_obj.macd_signal()
+        hist_line   = macd_obj.macd_diff()
 
         # EMAs
-        ema9   = ta.ema(close, length=9)
-        ema21  = ta.ema(close, length=21)
-        ema50  = ta.ema(close, length=50)
-        ema200 = ta.ema(close, length=200)
+        ema9   = ta.trend.EMAIndicator(close=close, window=9).ema_indicator()
+        ema21  = ta.trend.EMAIndicator(close=close, window=21).ema_indicator()
+        ema50  = ta.trend.EMAIndicator(close=close, window=50).ema_indicator()
+        ema200 = ta.trend.EMAIndicator(close=close, window=200).ema_indicator()
 
         # ATR(14)
-        atr_series = ta.atr(high, low, close, length=14)
+        atr_series = ta.volatility.AverageTrueRange(
+            high=high, low=low, close=close, window=14
+        ).average_true_range()
 
         # ADX(14)
-        adx_df = ta.adx(high, low, close, length=14)
+        adx_series = ta.trend.ADXIndicator(
+            high=high, low=low, close=close, window=14
+        ).adx()
 
         # Volume 20-day average
         vol_ma20 = volume.rolling(20).mean()
@@ -107,21 +114,18 @@ def calculate_indicators(df: pd.DataFrame) -> dict | None:
         # Grab last valid row
         idx = -1
         rsi      = float(rsi_series.iloc[idx])
-        macd_val = float(macd_df.iloc[idx, 0])   # MACD_12_26_9
-        signal   = float(macd_df.iloc[idx, 2])   # MACDs_12_26_9
-        hist     = float(macd_df.iloc[idx, 1])   # MACDh_12_26_9
+        macd_val = float(macd_line.iloc[idx])
+        signal   = float(signal_line.iloc[idx])
+        hist     = float(hist_line.iloc[idx])
         # Previous histogram for "increasing" check
-        hist_prev = float(macd_df.iloc[-2, 1]) if len(macd_df) >= 2 else hist
+        hist_prev = float(hist_line.iloc[-2]) if len(hist_line) >= 2 else hist
 
         e9   = float(ema9.iloc[idx])
         e21  = float(ema21.iloc[idx])
         e50  = float(ema50.iloc[idx])
         e200 = float(ema200.iloc[idx])
         atr  = float(atr_series.iloc[idx])
-
-        # ADX column name produced by pandas-ta is "ADX_14"
-        adx_col = [c for c in adx_df.columns if c.upper().startswith("ADX_")][0]
-        adx = float(adx_df[adx_col].iloc[idx])
+        adx  = float(adx_series.iloc[idx])
 
         price       = float(close.iloc[idx])
         vol_today   = float(volume.iloc[idx])
