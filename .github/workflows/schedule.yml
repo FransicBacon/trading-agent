@@ -2,8 +2,8 @@ name: Trading Agent
 
 on:
   schedule:
-    # Every 30 min from 9:30 AM to 3:30 PM EST (14:30-20:30 UTC), Mon-Fri
-    - cron: "30 14,15,16,17,18,19,20 * * 1-5"
+    # Every 30 min from 9:00 AM to 4:00 PM ET (13:00-20:00 UTC), Mon-Fri
+    - cron: "0,30 13-20 * * 1-5"
   workflow_dispatch:   # allow manual trigger for testing
 
 jobs:

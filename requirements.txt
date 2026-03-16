@@ -1,4 +1,5 @@
 alpaca-py
+pytz
 groq
 yfinance
 pandas

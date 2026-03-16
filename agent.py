@@ -9,6 +9,7 @@ Notifications: Telegram.
 import os
 import json
 import datetime
+import pytz
 import requests
 import numpy as np
 import pandas as pd
@@ -650,6 +651,18 @@ def run():
         print("Market closed, exiting.")
         return
 
+    # ── Opening range protection ───────────────────────────────────────────
+    et = pytz.timezone('America/New_York')
+    now_et = datetime.datetime.now(et)
+    first_trade_allowed = now_et.replace(hour=10, minute=0, second=0, microsecond=0)
+
+    if now_et < first_trade_allowed:
+        print("Opening range protection: market open less than 30 min ago")
+        print("Running SCAN ONLY mode — no trades will be placed")
+        SCAN_ONLY = True
+    else:
+        SCAN_ONLY = False
+
     # ── Load history & build stats once per run ───────────────────────────
     history = load_trade_history(sb)
     stats   = build_performance_stats(history)
@@ -779,6 +792,11 @@ def run():
             qty            = int(position_value // ind["price"])
             if qty < 1:
                 print(f"  [skip] Calculated qty < 1 (price too high for position size)")
+                skipped += 1
+                continue
+
+            if SCAN_ONLY:
+                print(f"  [SCAN ONLY] Would have bought {symbol} — waiting for 10:00 AM ET")
                 skipped += 1
                 continue
 
