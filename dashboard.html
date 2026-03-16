@@ -483,7 +483,7 @@ async function loadData() {
   document.getElementById('error-banner').style.display = 'none';
   try {
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/trades?select=*&order=created_at.desc&limit=200`,
+      `${SUPABASE_URL}/rest/v1/Trade?select=*&order=created_at.desc&limit=200`,
       { headers: { 'apikey': key, 'Authorization': `Bearer ${key}` } }
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
