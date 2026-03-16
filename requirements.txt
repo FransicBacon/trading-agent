@@ -2,6 +2,6 @@ alpaca-py
 groq
 yfinance
 pandas
-ta-lib-python
+ta
 requests
 numpy
