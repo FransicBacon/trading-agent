@@ -457,12 +457,12 @@ let refreshTimer = null;
 let countdown   = 300;
 
 // ── Key management ────────────────────────────────────────────────────────────
-function getSBKey() { return localStorage.getItem('sb_key'); }
+function getSBKey() { return localStorage.getItem('sb_key')?.trim(); }
 
 function saveKey() {
   const k = document.getElementById('key-input').value.trim();
   if (!k) return;
-  localStorage.setItem('sb_key', k);
+  localStorage.setItem('sb_key', k.trim());
   document.getElementById('setup-modal').style.display = 'none';
   document.getElementById('disconnect-btn').style.display = 'inline-block';
   loadData();
@@ -491,12 +491,17 @@ async function loadData() {
         headers: {
           'apikey': key,
           'Authorization': 'Bearer ' + key,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation'
         }
       }
     );
     console.log('Supabase response status:', res.status);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.log('Supabase error response:', errorText);
+      throw new Error(`HTTP ${res.status}`);
+    }
     const trades = await res.json();
     if (!Array.isArray(trades)) throw new Error('Invalid response');
     allTrades = trades;
