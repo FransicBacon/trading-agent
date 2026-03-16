@@ -28,7 +28,71 @@ from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-WATCHLIST = ["AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "META", "AMD", "GOOGL", "NFLX", "SPY"]
+WATCHLIST = [
+    # Technology
+    "NVDA", "AAPL", "MSFT", "AMD",
+    # Communication
+    "META", "GOOGL", "GOOG", "NFLX",
+    # Consumer Discretionary
+    "AMZN", "TSLA", "HD",
+    # Health Care
+    "UNH", "LLY", "JNJ",
+    # Financials
+    "JPM", "BRK-B", "BAC",
+    # Industrials
+    "CAT", "GE", "RTX",
+    # Consumer Staples
+    "PG", "WMT", "COST",
+    # Energy
+    "XOM", "CVX", "COP",
+    # Utilities
+    "NEE", "SO", "DUK",
+    # Materials
+    "LIN", "SHW", "APD",
+    # Real Estate
+    "PLD", "AMT", "CCI",
+    # ETF Benchmark
+    "SPY",
+]
+
+SECTOR_MAP = {
+    "NVDA": "Technology",
+    "AAPL": "Technology",
+    "MSFT": "Technology",
+    "AMD":  "Technology",
+    "META":  "Communication",
+    "GOOGL": "Communication",
+    "GOOG":  "Communication",
+    "NFLX":  "Communication",
+    "AMZN": "Consumer Disc",
+    "TSLA": "Consumer Disc",
+    "HD":   "Consumer Disc",
+    "UNH": "Health Care",
+    "LLY": "Health Care",
+    "JNJ": "Health Care",
+    "JPM":   "Financials",
+    "BRK-B": "Financials",
+    "BAC":   "Financials",
+    "CAT": "Industrials",
+    "GE":  "Industrials",
+    "RTX": "Industrials",
+    "PG":   "Consumer Staples",
+    "WMT":  "Consumer Staples",
+    "COST": "Consumer Staples",
+    "XOM": "Energy",
+    "CVX": "Energy",
+    "COP": "Energy",
+    "NEE": "Utilities",
+    "SO":  "Utilities",
+    "DUK": "Utilities",
+    "LIN": "Materials",
+    "SHW": "Materials",
+    "APD": "Materials",
+    "PLD": "Real Estate",
+    "AMT": "Real Estate",
+    "CCI": "Real Estate",
+    "SPY": "ETF",
+}
 
 MAX_POSITIONS      = 3       # max simultaneous open positions
 POSITION_PCT       = 0.10    # 10% of portfolio per trade
@@ -675,10 +739,12 @@ def run():
     account         = trading_client.get_account()
     portfolio_value = float(account.portfolio_value)
     existing_pos    = get_existing_positions(trading_client)
+    occupied_sectors = {SECTOR_MAP.get(sym, "Unknown") for sym in existing_pos}
 
-    buys_executed = 0
-    sells_executed = 0
-    skipped        = 0
+    buys_executed     = 0
+    sells_executed    = 0
+    skipped           = 0
+    sector_score_counts: dict[str, int] = {}  # sector -> count of stocks with score >= 4
 
     print(f"\n{'='*60}")
     print(f"Portfolio value: ${portfolio_value:,.2f} | Open positions: {len(existing_pos)}")
@@ -702,7 +768,8 @@ def run():
                     pnl     = round((ind["price"] - entry_price) * float(position.qty), 2)
                     pnl_pct = round((ind["price"] - entry_price) / entry_price * 100, 2)
                     result  = "WIN" if pnl > 0 else "LOSS"
-                    print(f"[{symbol}] SELL | {reason} | Price: ${ind['price']:.2f}")
+                    sector = SECTOR_MAP.get(symbol, "Unknown")
+                    print(f"[{symbol} | {sector}] SELL | {reason} | Price: ${ind['price']:.2f}")
                     update_sell_trade(sb, symbol, ind["price"])
                     send_telegram(
                         f"🔴 SOLD {symbol}\n"
@@ -716,11 +783,14 @@ def run():
             print(f"[{symbol}] sell-check error: {exc}")
 
     # Refresh positions after sells
-    existing_pos = get_existing_positions(trading_client)
+    existing_pos     = get_existing_positions(trading_client)
+    occupied_sectors = {SECTOR_MAP.get(sym, "Unknown") for sym in existing_pos}
 
     # ── 2. Scan watchlist for buy signals ─────────────────────────────────
     for symbol in WATCHLIST:
         try:
+            sector = SECTOR_MAP.get(symbol, "Unknown")
+
             if symbol in existing_pos:
                 skipped += 1
                 continue
@@ -730,19 +800,19 @@ def run():
                 continue
 
             if earnings_soon(symbol):
-                print(f"[{symbol}] Skipping — earnings within {EARNINGS_LOOKOUT} days")
+                print(f"[{symbol} | {sector}] Skipping — earnings within {EARNINGS_LOOKOUT} days")
                 skipped += 1
                 continue
 
             df = fetch_data(symbol)
             if df is None:
-                print(f"[{symbol}] Skipping — insufficient data")
+                print(f"[{symbol} | {sector}] Skipping — insufficient data")
                 skipped += 1
                 continue
 
             ind = calculate_indicators(df)
             if ind is None:
-                print(f"[{symbol}] Skipping — indicator calculation failed")
+                print(f"[{symbol} | {sector}] Skipping — indicator calculation failed")
                 skipped += 1
                 continue
 
@@ -752,12 +822,25 @@ def run():
             sl_pct      = (ind["price"] - stop_loss) / ind["price"] * 100
             tp_pct      = (take_profit - ind["price"]) / ind["price"] * 100
 
+            # Track hottest sector (score >= 4 signals per sector)
+            if score >= MIN_SCORE:
+                sector_score_counts[sector] = sector_score_counts.get(sector, 0) + 1
+
             if not passes_filters(ind, score):
                 print(
-                    f"[{symbol}] ${ind['price']:.2f} | RSI:{ind['rsi']:.1f} | "
+                    f"[{symbol} | {sector}] ${ind['price']:.2f} | RSI:{ind['rsi']:.1f} | "
                     f"ADX:{ind['adx']:.1f} | Score:{score}/6 | "
                     f"ATR-SL:${stop_loss:.2f} | ATR-TP:${take_profit:.2f} | "
                     f"Decision:SKIP | filter_fail"
+                )
+                skipped += 1
+                continue
+
+            # Sector cap: max 1 open position per sector
+            if sector in occupied_sectors:
+                print(
+                    f"[{symbol} | {sector}] ${ind['price']:.2f} | RSI:{ind['rsi']:.1f} | "
+                    f"Score:{score}/6 | Decision:SKIP | sector_cap"
                 )
                 skipped += 1
                 continue
@@ -778,7 +861,7 @@ def run():
                 groq_label = f"SKIP({confidence}%) - {reason}"
 
             print(
-                f"[{symbol}] ${ind['price']:.2f} | RSI:{ind['rsi']:.1f} | "
+                f"[{symbol} | {sector}] ${ind['price']:.2f} | RSI:{ind['rsi']:.1f} | "
                 f"ADX:{ind['adx']:.1f} | Score:{score}/6 | "
                 f"ATR-SL:${stop_loss:.2f} | ATR-TP:${take_profit:.2f} | "
                 f"Decision:{'BUY' if final_buy else 'SKIP'} | Groq:{groq_label}"
@@ -805,6 +888,7 @@ def run():
             )
             if success:
                 buys_executed += 1
+                occupied_sectors.add(sector)  # block further buys in this sector this run
                 print(
                     f"  -> Bracket order placed: {qty} shares | "
                     f"SL:${stop_loss:.2f} | TP:${take_profit:.2f}"
@@ -823,7 +907,7 @@ def run():
                     portfolio     = portfolio_value,
                 )
                 send_telegram(
-                    f"🟢 BUY {symbol}\n"
+                    f"🟢 BUY {symbol} ({sector})\n"
                     f"Price: ${ind['price']:.2f}\n"
                     f"Shares: {qty}\n"
                     f"Stop-Loss: ${stop_loss:.2f}\n"
@@ -837,6 +921,18 @@ def run():
         except Exception as exc:
             print(f"[{symbol}] unexpected error: {exc}")
             skipped += 1
+
+    # ── Hottest sector report ─────────────────────────────────────────────
+    if sector_score_counts:
+        hottest = max(sector_score_counts, key=lambda s: sector_score_counts[s])
+        print(
+            f"\n[sector] Hottest sector: {hottest} "
+            f"({sector_score_counts[hottest]} stocks with score >= {MIN_SCORE})"
+        )
+        for sec, cnt in sorted(sector_score_counts.items(), key=lambda x: -x[1]):
+            print(f"  {sec}: {cnt} signal(s)")
+    else:
+        print(f"\n[sector] No stocks reached score >= {MIN_SCORE} this run")
 
     # ── Summary ───────────────────────────────────────────────────────────
     try:
