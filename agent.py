@@ -2,6 +2,7 @@
 Production-ready automated stock trading agent.
 Strategy: Multi-Indicator Momentum with Groq AI confirmation.
 Broker: Alpaca Paper Trading (alpaca-py).
+Logging & learning: Supabase.
 """
 
 import os
@@ -13,15 +14,14 @@ import ta
 import yfinance as yf
 
 from groq import Groq
+from supabase import create_client, Client as SupabaseClient
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
-    GetAssetsRequest,
+    StopLossRequest,
+    TakeProfitRequest,
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
-from alpaca.trading.requests import LimitOrderRequest, StopLossRequest, TakeProfitRequest
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.trading.requests import MarketOrderRequest
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
@@ -37,8 +37,9 @@ FALLBACK_MIN_SCORE = 5       # score required when Groq is unavailable
 EARNINGS_LOOKOUT   = 7       # skip if earnings within N days
 DATA_DAYS          = 150     # days of historical data to download
 MIN_ROWS           = 50      # skip stock if fewer rows returned
+HISTORY_LIMIT      = 30      # trades to load for Groq learning
 
-# ── Alpaca & Groq clients ─────────────────────────────────────────────────────
+# ── Client factories ──────────────────────────────────────────────────────────
 
 def get_trading_client() -> TradingClient:
     return TradingClient(
@@ -52,11 +53,186 @@ def get_groq_client() -> Groq:
     return Groq(api_key=os.environ["GROQ_API_KEY"])
 
 
+def get_supabase_client() -> SupabaseClient:
+    return create_client(
+        os.environ["SUPABASE_URL"],
+        os.environ["SUPABASE_KEY"],
+    )
+
+
 # ── Market-hours check ────────────────────────────────────────────────────────
 
 def market_is_open(client: TradingClient) -> bool:
-    clock = client.get_clock()
-    return clock.is_open
+    return client.get_clock().is_open
+
+
+# ── Supabase trade logging ─────────────────────────────────────────────────────
+
+def save_buy_trade(
+    sb: SupabaseClient,
+    symbol: str,
+    price: float,
+    shares: int,
+    score: int,
+    rsi: float,
+    adx: float,
+    groq_decision: str,
+    groq_conf: int,
+    reason: str,
+    portfolio: float,
+) -> None:
+    """Insert a new BUY row into the trades table."""
+    try:
+        sb.table("trades").insert({
+            "symbol":        symbol,
+            "action":        "BUY",
+            "price":         round(price, 4),
+            "shares":        shares,
+            "score":         score,
+            "rsi":           round(rsi, 2),
+            "adx":           round(adx, 2),
+            "groq_decision": groq_decision,
+            "groq_conf":     groq_conf,
+            "reason":        reason,
+            "result":        "OPEN",
+            "portfolio":     round(portfolio, 2),
+        }).execute()
+    except Exception as exc:
+        print(f"  [supabase buy log error] {exc}")
+
+
+def update_sell_trade(
+    sb: SupabaseClient,
+    symbol: str,
+    exit_price: float,
+) -> None:
+    """Find the most recent OPEN trade for symbol and update it with sell info."""
+    try:
+        # Fetch the most recent OPEN trade for this symbol
+        resp = (
+            sb.table("trades")
+            .select("id, price, shares")
+            .eq("symbol", symbol)
+            .eq("result", "OPEN")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        if not resp.data:
+            return
+        row        = resp.data[0]
+        entry_price = float(row["price"])
+        shares      = int(row["shares"])
+        pnl         = round((exit_price - entry_price) * shares, 2)
+        result      = "WIN" if pnl > 0 else "LOSS"
+        sb.table("trades").update({
+            "action": "SELL",
+            "pnl":    pnl,
+            "result": result,
+        }).eq("id", row["id"]).execute()
+    except Exception as exc:
+        print(f"  [supabase sell log error] {exc}")
+
+
+# ── Trade history & performance stats ────────────────────────────────────────
+
+def load_trade_history(sb: SupabaseClient) -> list[dict]:
+    """Fetch the last HISTORY_LIMIT closed trades (WIN or LOSS)."""
+    try:
+        resp = (
+            sb.table("trades")
+            .select("symbol, score, result, pnl")
+            .in_("result", ["WIN", "LOSS"])
+            .order("created_at", desc=True)
+            .limit(HISTORY_LIMIT)
+            .execute()
+        )
+        return resp.data or []
+    except Exception as exc:
+        print(f"  [supabase history error] {exc}")
+        return []
+
+
+def calc_win_rate(trades: list[dict]) -> float:
+    """Return win rate 0-100 for a list of trades. Returns 0 if empty."""
+    if not trades:
+        return 0.0
+    wins = sum(1 for t in trades if t["result"] == "WIN")
+    return round(wins / len(trades) * 100, 1)
+
+
+def build_performance_stats(trades: list[dict]) -> dict:
+    """
+    Returns a dict with:
+      - overall_win_rate
+      - per_symbol: {symbol: {"win_rate": X, "n": N}}
+      - per_score:  {4: X%, 5: X%, 6: X%}
+      - best_symbol, worst_symbol  (min 2 trades to qualify)
+    """
+    if not trades:
+        return {
+            "overall_win_rate": 0.0,
+            "per_symbol": {},
+            "per_score":  {},
+            "best_symbol":  None,
+            "worst_symbol": None,
+        }
+
+    overall_win_rate = calc_win_rate(trades)
+
+    # Per-symbol
+    symbols: dict[str, list] = {}
+    for t in trades:
+        symbols.setdefault(t["symbol"], []).append(t)
+    per_symbol = {
+        sym: {"win_rate": calc_win_rate(ts), "n": len(ts)}
+        for sym, ts in symbols.items()
+    }
+
+    # Per-score (only scores 4/5/6)
+    per_score: dict[int, float] = {}
+    for lvl in (4, 5, 6):
+        lvl_trades = [t for t in trades if t.get("score") == lvl]
+        if lvl_trades:
+            per_score[lvl] = calc_win_rate(lvl_trades)
+
+    # Best / worst (require >= 2 trades)
+    qualified = {s: v for s, v in per_symbol.items() if v["n"] >= 2}
+    best_symbol  = max(qualified, key=lambda s: qualified[s]["win_rate"]) if qualified else None
+    worst_symbol = min(qualified, key=lambda s: qualified[s]["win_rate"]) if qualified else None
+
+    return dict(
+        overall_win_rate = overall_win_rate,
+        per_symbol       = per_symbol,
+        per_score        = per_score,
+        best_symbol      = best_symbol,
+        worst_symbol     = worst_symbol,
+    )
+
+
+def build_history_prompt_block(symbol: str, stats: dict) -> str:
+    """Build the history section injected into every Groq prompt."""
+    if not stats["per_symbol"]:
+        return ""
+
+    sym_info = stats["per_symbol"].get(symbol)
+    sym_line = (
+        f"- {symbol} win rate: {sym_info['win_rate']}% ({sym_info['n']} trades)"
+        if sym_info else f"- {symbol}: no history yet"
+    )
+
+    score_lines = "\n".join(
+        f"- Score {lvl}/6 win rate: {wr}%"
+        for lvl, wr in sorted(stats["per_score"].items())
+    ) or "- Score breakdown: insufficient data"
+
+    return (
+        f"\nMy recent trading history (last {HISTORY_LIMIT} trades):\n"
+        f"- Overall win rate: {stats['overall_win_rate']}%\n"
+        f"{sym_line}\n"
+        f"{score_lines}\n"
+        f"Use this data to adjust your confidence up or down.\n"
+    )
 
 
 # ── Data & indicator calculation ──────────────────────────────────────────────
@@ -68,7 +244,6 @@ def fetch_data(symbol: str) -> pd.DataFrame | None:
     df    = yf.download(symbol, start=start, end=end, progress=False, auto_adjust=True)
     if df is None or len(df) < MIN_ROWS:
         return None
-    # Flatten MultiIndex columns that yfinance sometimes returns
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     df.columns = [c.lower() for c in df.columns]
@@ -87,8 +262,8 @@ def calculate_indicators(df: pd.DataFrame) -> dict | None:
         rsi_series = ta.momentum.RSIIndicator(close=close, window=14).rsi()
 
         # MACD(12,26,9)
-        macd_obj  = ta.trend.MACD(close=close, window_slow=26, window_fast=12, window_sign=9)
-        macd_line = macd_obj.macd()
+        macd_obj    = ta.trend.MACD(close=close, window_slow=26, window_fast=12, window_sign=9)
+        macd_line   = macd_obj.macd()
         signal_line = macd_obj.macd_signal()
         hist_line   = macd_obj.macd_diff()
 
@@ -111,13 +286,11 @@ def calculate_indicators(df: pd.DataFrame) -> dict | None:
         # Volume 20-day average
         vol_ma20 = volume.rolling(20).mean()
 
-        # Grab last valid row
-        idx = -1
-        rsi      = float(rsi_series.iloc[idx])
-        macd_val = float(macd_line.iloc[idx])
-        signal   = float(signal_line.iloc[idx])
-        hist     = float(hist_line.iloc[idx])
-        # Previous histogram for "increasing" check
+        idx       = -1
+        rsi       = float(rsi_series.iloc[idx])
+        macd_val  = float(macd_line.iloc[idx])
+        signal    = float(signal_line.iloc[idx])
+        hist      = float(hist_line.iloc[idx])
         hist_prev = float(hist_line.iloc[-2]) if len(hist_line) >= 2 else hist
 
         e9   = float(ema9.iloc[idx])
@@ -127,10 +300,10 @@ def calculate_indicators(df: pd.DataFrame) -> dict | None:
         atr  = float(atr_series.iloc[idx])
         adx  = float(adx_series.iloc[idx])
 
-        price       = float(close.iloc[idx])
-        vol_today   = float(volume.iloc[idx])
-        vol_avg20   = float(vol_ma20.iloc[idx])
-        vol_ratio   = vol_today / vol_avg20 if vol_avg20 > 0 else 0.0
+        price     = float(close.iloc[idx])
+        vol_today = float(volume.iloc[idx])
+        vol_avg20 = float(vol_ma20.iloc[idx])
+        vol_ratio = vol_today / vol_avg20 if vol_avg20 > 0 else 0.0
 
         return dict(
             price=price,
@@ -187,9 +360,10 @@ def groq_confirm(
     symbol: str,
     ind: dict,
     score: int,
+    stats: dict,
 ) -> tuple[str, int, str]:
     """
-    Ask Groq whether to BUY or SKIP.
+    Ask Groq whether to BUY or SKIP, injecting trade history stats.
     Returns (decision, confidence, reason).
     Falls back to ("FALLBACK", 0, "groq_error") on failure.
     """
@@ -198,6 +372,7 @@ def groq_confirm(
     sl_pct      = (ind["price"] - stop_loss) / ind["price"] * 100
     tp_pct      = (take_profit - ind["price"]) / ind["price"] * 100
     trend_label = "Above" if ind["price"] > ind["ema200"] else "Below"
+    history_block = build_history_prompt_block(symbol, stats)
 
     prompt = (
         f"You are a professional swing trading AI.\n"
@@ -212,7 +387,8 @@ def groq_confirm(
         f"Proposed Stop-Loss: ${stop_loss:.2f} ({sl_pct:.1f}% risk)\n"
         f"Proposed Take-Profit: ${take_profit:.2f} ({tp_pct:.1f}% reward)\n"
         f"Volume vs 20d avg: {ind['vol_ratio']:.1f}x\n"
-        f"Technical Score: {score}/6\n\n"
+        f"Technical Score: {score}/6\n"
+        f"{history_block}\n"
         'Reply ONLY with valid JSON, no extra text:\n'
         '{"decision": "BUY or SKIP", "confidence": 0-100, "reason": "max 12 words"}'
     )
@@ -225,7 +401,6 @@ def groq_confirm(
             max_tokens=120,
         )
         raw = response.choices[0].message.content.strip()
-        # Strip markdown fences if present
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -246,11 +421,10 @@ def groq_confirm(
 def earnings_soon(symbol: str) -> bool:
     """Return True if earnings are within EARNINGS_LOOKOUT days."""
     try:
-        ticker    = yf.Ticker(symbol)
-        cal       = ticker.calendar
+        ticker = yf.Ticker(symbol)
+        cal    = ticker.calendar
         if cal is None or cal.empty:
             return False
-        # calendar is a DataFrame with 'Earnings Date' as column or index
         if "Earnings Date" in cal.columns:
             dates = pd.to_datetime(cal["Earnings Date"], errors="coerce").dropna()
         elif "Earnings Date" in cal.index:
@@ -261,8 +435,7 @@ def earnings_soon(symbol: str) -> bool:
         for d in dates:
             if pd.NaT == d:
                 continue
-            diff = (d.normalize() - today).days
-            if 0 <= diff <= EARNINGS_LOOKOUT:
+            if 0 <= (d.normalize() - today).days <= EARNINGS_LOOKOUT:
                 return True
         return False
     except Exception:
@@ -272,16 +445,10 @@ def earnings_soon(symbol: str) -> bool:
 # ── Alpaca order helpers ──────────────────────────────────────────────────────
 
 def get_existing_positions(client: TradingClient) -> dict[str, object]:
-    """Return {symbol: position} for all open positions."""
     try:
-        positions = client.get_all_positions()
-        return {p.symbol: p for p in positions}
+        return {p.symbol: p for p in client.get_all_positions()}
     except Exception:
         return {}
-
-
-def get_open_position_count(client: TradingClient) -> int:
-    return len(get_existing_positions(client))
 
 
 def place_bracket_order(
@@ -291,9 +458,8 @@ def place_bracket_order(
     stop_loss: float,
     take_profit: float,
 ) -> bool:
-    """Place a bracket order (entry + SL + TP). Returns True on success."""
     try:
-        req = MarketOrderRequest(
+        client.submit_order(MarketOrderRequest(
             symbol        = symbol,
             qty           = qty,
             side          = OrderSide.BUY,
@@ -301,8 +467,7 @@ def place_bracket_order(
             order_class   = OrderClass.BRACKET,
             stop_loss     = StopLossRequest(stop_price=round(stop_loss, 2)),
             take_profit   = TakeProfitRequest(limit_price=round(take_profit, 2)),
-        )
-        client.submit_order(req)
+        ))
         return True
     except Exception as exc:
         print(f"  [order error] {exc}")
@@ -310,7 +475,6 @@ def place_bracket_order(
 
 
 def close_position(client: TradingClient, symbol: str) -> bool:
-    """Market-sell entire position. Returns True on success."""
     try:
         client.close_position(symbol)
         return True
@@ -322,11 +486,6 @@ def close_position(client: TradingClient, symbol: str) -> bool:
 # ── Sell logic ────────────────────────────────────────────────────────────────
 
 def should_sell(ind: dict, entry_price: float) -> tuple[bool, str]:
-    """
-    Returns (True, reason) if any sell signal fires, else (False, "").
-    ATR-based SL/TP are managed by Alpaca bracket orders, but we re-check
-    here as a safety net in case the bracket was never filled.
-    """
     stop_loss   = entry_price - ind["atr"] * ATR_SL_MULTIPLIER
     take_profit = entry_price + ind["atr"] * ATR_TP_MULTIPLIER
 
@@ -345,24 +504,139 @@ def should_sell(ind: dict, entry_price: float) -> tuple[bool, str]:
     return False, ""
 
 
+# ── Weekly summary (Fridays 15:30 EST) ───────────────────────────────────────
+
+def is_weekly_summary_time() -> bool:
+    """True on Fridays at the 15:30 EST run (20:30 UTC)."""
+    now = datetime.datetime.utcnow()
+    return now.weekday() == 4 and now.hour == 20
+
+
+def print_weekly_summary(groq_client: Groq, sb: SupabaseClient) -> None:
+    """Fetch all closed trades from the past 7 days and print a summary."""
+    try:
+        since = (datetime.datetime.utcnow() - datetime.timedelta(days=7)).isoformat()
+        resp  = (
+            sb.table("trades")
+            .select("symbol, score, result, pnl")
+            .in_("result", ["WIN", "LOSS"])
+            .gte("created_at", since)
+            .execute()
+        )
+        trades = resp.data or []
+    except Exception as exc:
+        print(f"[weekly summary] Supabase error: {exc}")
+        return
+
+    if not trades:
+        print("\n=== WEEKLY REPORT ===\nNo closed trades this week.\n====================")
+        return
+
+    stats        = build_performance_stats(trades)
+    total        = len(trades)
+    wins         = sum(1 for t in trades if t["result"] == "WIN")
+    losses       = total - wins
+    win_rate     = stats["overall_win_rate"]
+    best_sym     = stats["best_symbol"]
+    worst_sym    = stats["worst_symbol"]
+    per_sym      = stats["per_symbol"]
+
+    best_line  = (
+        f"{best_sym} ({per_sym[best_sym]['win_rate']}% win rate)"
+        if best_sym else "N/A"
+    )
+    worst_line = (
+        f"{worst_sym} ({per_sym[worst_sym]['win_rate']}% win rate)"
+        if worst_sym else "N/A"
+    )
+
+    score_lines = "\n".join(
+        f"  Score {lvl}/6 win rate: {wr}%"
+        for lvl, wr in sorted(stats["per_score"].items())
+    ) or "  Insufficient data"
+
+    best_score_lvl = (
+        max(stats["per_score"], key=lambda k: stats["per_score"][k])
+        if stats["per_score"] else "N/A"
+    )
+    best_score_wr = stats["per_score"].get(best_score_lvl, 0) if isinstance(best_score_lvl, int) else 0
+
+    # Ask Groq for a 2-sentence recommendation
+    recommendation = _groq_weekly_recommendation(groq_client, stats, trades)
+
+    print(
+        f"\n{'='*20} WEEKLY REPORT {'='*20}\n"
+        f"Trades: {total} | Wins: {wins} | Losses: {losses} | Win Rate: {win_rate}%\n"
+        f"Best symbol:  {best_line}\n"
+        f"Worst symbol: {worst_line}\n"
+        f"Score breakdown:\n{score_lines}\n"
+        f"Best score level: {best_score_lvl}/6 ({best_score_wr}% win rate)\n"
+        f"Recommendation: {recommendation}\n"
+        f"{'='*55}"
+    )
+
+
+def _groq_weekly_recommendation(groq_client: Groq, stats: dict, trades: list[dict]) -> str:
+    """Ask Groq for a 2-sentence strategy recommendation based on the week."""
+    per_sym   = stats["per_symbol"]
+    sym_lines = "\n".join(
+        f"  {s}: {v['win_rate']}% ({v['n']} trades)"
+        for s, v in sorted(per_sym.items(), key=lambda x: -x[1]["win_rate"])
+    ) or "  No data"
+    score_lines = "\n".join(
+        f"  Score {lvl}/6: {wr}%"
+        for lvl, wr in sorted(stats["per_score"].items())
+    ) or "  No data"
+
+    prompt = (
+        f"You are a professional trading analyst.\n"
+        f"Here is last week's performance summary:\n\n"
+        f"Overall win rate: {stats['overall_win_rate']}%\n"
+        f"Symbol performance:\n{sym_lines}\n"
+        f"Score level performance:\n{score_lines}\n\n"
+        f"Write exactly 2 sentences recommending how to adjust the strategy next week. "
+        f"Be specific and concise."
+    )
+    try:
+        resp = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=120,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as exc:
+        return f"(Groq unavailable: {exc})"
+
+
 # ── Main run loop ─────────────────────────────────────────────────────────────
 
 def run():
     trading_client = get_trading_client()
     groq_client    = get_groq_client()
+    sb             = get_supabase_client()
 
     # Market-hours check
     if not market_is_open(trading_client):
         print("Market closed, exiting.")
         return
 
-    account          = trading_client.get_account()
-    portfolio_value  = float(account.portfolio_value)
-    existing_pos     = get_existing_positions(trading_client)
+    # ── Load history & build stats once per run ───────────────────────────
+    history = load_trade_history(sb)
+    stats   = build_performance_stats(history)
+    if history:
+        print(
+            f"[history] Loaded {len(history)} trades | "
+            f"Overall win rate: {stats['overall_win_rate']}%"
+        )
 
-    buys_executed    = 0
-    sells_executed   = 0
-    skipped          = 0
+    account         = trading_client.get_account()
+    portfolio_value = float(account.portfolio_value)
+    existing_pos    = get_existing_positions(trading_client)
+
+    buys_executed = 0
+    sells_executed = 0
+    skipped        = 0
 
     print(f"\n{'='*60}")
     print(f"Portfolio value: ${portfolio_value:,.2f} | Open positions: {len(existing_pos)}")
@@ -384,6 +658,7 @@ def run():
                 if success:
                     sells_executed += 1
                     print(f"[{symbol}] SELL | {reason} | Price: ${ind['price']:.2f}")
+                    update_sell_trade(sb, symbol, ind["price"])
         except Exception as exc:
             print(f"[{symbol}] sell-check error: {exc}")
 
@@ -393,17 +668,14 @@ def run():
     # ── 2. Scan watchlist for buy signals ─────────────────────────────────
     for symbol in WATCHLIST:
         try:
-            # Skip already-held positions
             if symbol in existing_pos:
                 skipped += 1
                 continue
 
-            # Enforce max-position cap
             if len(existing_pos) + buys_executed >= MAX_POSITIONS:
                 skipped += 1
                 continue
 
-            # Skip if earnings imminent
             if earnings_soon(symbol):
                 print(f"[{symbol}] Skipping — earnings within {EARNINGS_LOOKOUT} days")
                 skipped += 1
@@ -437,13 +709,13 @@ def run():
                 skipped += 1
                 continue
 
-            # Groq confirmation
-            decision, confidence, reason = groq_confirm(groq_client, symbol, ind, score)
+            # Groq confirmation — with history injected
+            decision, confidence, reason = groq_confirm(
+                groq_client, symbol, ind, score, stats
+            )
 
-            # Determine final action
             if decision == "FALLBACK":
-                # Groq unavailable — use fallback score threshold
-                final_buy = score >= FALLBACK_MIN_SCORE
+                final_buy  = score >= FALLBACK_MIN_SCORE
                 groq_label = f"FALLBACK(score={score})"
             elif decision == "BUY" and confidence >= GROQ_MIN_CONF:
                 final_buy  = True
@@ -463,7 +735,6 @@ def run():
                 skipped += 1
                 continue
 
-            # Calculate position size
             position_value = portfolio_value * POSITION_PCT
             qty            = int(position_value // ind["price"])
             if qty < 1:
@@ -476,7 +747,23 @@ def run():
             )
             if success:
                 buys_executed += 1
-                print(f"  -> Bracket order placed: {qty} shares | SL:${stop_loss:.2f} | TP:${take_profit:.2f}")
+                print(
+                    f"  -> Bracket order placed: {qty} shares | "
+                    f"SL:${stop_loss:.2f} | TP:${take_profit:.2f}"
+                )
+                save_buy_trade(
+                    sb,
+                    symbol      = symbol,
+                    price       = ind["price"],
+                    shares      = qty,
+                    score       = score,
+                    rsi         = ind["rsi"],
+                    adx         = ind["adx"],
+                    groq_decision = decision,
+                    groq_conf   = confidence,
+                    reason      = reason,
+                    portfolio   = portfolio_value,
+                )
             else:
                 skipped += 1
 
@@ -485,10 +772,8 @@ def run():
             skipped += 1
 
     # ── Summary ───────────────────────────────────────────────────────────
-    # Refresh portfolio value
     try:
-        account         = trading_client.get_account()
-        portfolio_value = float(account.portfolio_value)
+        portfolio_value = float(trading_client.get_account().portfolio_value)
     except Exception:
         pass
 
@@ -498,6 +783,10 @@ def run():
         f"Skipped:{skipped} | Portfolio:${portfolio_value:,.2f} ===\n"
         f"{'='*60}"
     )
+
+    # ── Weekly report (Fridays only) ──────────────────────────────────────
+    if is_weekly_summary_time():
+        print_weekly_summary(groq_client, sb)
 
 
 if __name__ == "__main__":
