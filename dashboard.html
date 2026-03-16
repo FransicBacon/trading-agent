@@ -482,10 +482,13 @@ async function loadData() {
   if (!key) return;
   document.getElementById('error-banner').style.display = 'none';
   try {
+    const fetchUrl = `${SUPABASE_URL}/rest/v1/Trade?select=*&order=created_at.desc&limit=200`;
+    console.log('Supabase fetch URL:', fetchUrl);
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/Trade?select=*&order=created_at.desc&limit=200`,
+      fetchUrl,
       { headers: { 'apikey': key, 'Authorization': `Bearer ${key}` } }
     );
+    console.log('Supabase response status:', res.status);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const trades = await res.json();
     if (!Array.isArray(trades)) throw new Error('Invalid response');
