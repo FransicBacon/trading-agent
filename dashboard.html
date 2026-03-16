@@ -482,7 +482,7 @@ async function loadData() {
   if (!key) return;
   document.getElementById('error-banner').style.display = 'none';
   try {
-    const fetchUrl = `${SUPABASE_URL}/rest/v1/Trade?select=*&order=created_at.desc&limit=200`;
+    const fetchUrl = `${SUPABASE_URL}/rest/v1/trades?select=*&order=created_at.desc&limit=200`;
     console.log('Supabase fetch URL:', fetchUrl);
     console.log('Using key:', key ? key.substring(0,20) + '...' : 'NO KEY FOUND');
     const res = await fetch(
