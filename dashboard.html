@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trading Agent Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:       #0b0b0f;
+    --surface:  #111118;
+    --surface2: #16161f;
+    --border:   #1f1f2e;
+    --green:    #00c805;
+    --red:      #ff5000;
+    --yellow:   #f5c518;
+    --blue:     #5ac8fa;
+    --text:     #f0f0f5;
+    --text2:    #8888aa;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* ── Modal ── */
+  #setup-modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,.85);
+    display: flex; align-items: center; justify-content: center; z-index: 1000;
+  }
+  .modal-box {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 40px; width: 100%; max-width: 460px; text-align: center;
+  }
+  .modal-box h2 { font-size: 1.4rem; margin-bottom: 8px; }
+  .modal-box p  { color: var(--text2); font-size: .9rem; margin-bottom: 24px; }
+  .modal-box input {
+    width: 100%; padding: 12px 16px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: .9rem; margin-bottom: 14px; outline: none;
+  }
+  .modal-box input:focus { border-color: var(--green); }
+  .btn-primary {
+    width: 100%; padding: 12px; background: var(--green); color: #000;
+    font-weight: 700; border: none; border-radius: 8px; cursor: pointer; font-size: .95rem;
+  }
+  .btn-primary:hover { opacity: .88; }
+
+  /* ── Header ── */
+  header {
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 14px 24px; display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 10px; position: sticky; top: 0; z-index: 100;
+  }
+  .header-left { display: flex; align-items: center; gap: 12px; }
+  .logo { font-size: 1.1rem; font-weight: 700; }
+  .logo span { color: var(--green); }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+    box-shadow: 0 0 6px var(--green); animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #countdown { font-size: .8rem; color: var(--text2); }
+  .btn-sm {
+    padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text); font-size: .78rem;
+    cursor: pointer; transition: border-color .2s;
+  }
+  .btn-sm:hover { border-color: var(--green); }
+  #error-banner {
+    background: rgba(255,80,0,.15); border: 1px solid var(--red); color: var(--red);
+    padding: 10px 24px; font-size: .85rem; text-align: center; display: none;
+  }
+
+  /* ── Main layout ── */
+  main { max-width: 1400px; margin: 0 auto; padding: 24px 20px; }
+
+  /* ── Metrics row ── */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px; margin-bottom: 24px;
+  }
+  .metric-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 20px;
+  }
+  .metric-label { font-size: .75rem; color: var(--text2); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 8px; }
+  .metric-value { font-size: 1.5rem; font-weight: 700; }
+  .metric-sub   { font-size: .75rem; color: var(--text2); margin-top: 4px; }
+  .green { color: var(--green); }
+  .red   { color: var(--red); }
+  .yellow{ color: var(--yellow); }
+  .blue  { color: var(--blue); }
+
+  /* ── Tabs ── */
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 24px; overflow-x: auto; }
+  .tab-btn {
+    padding: 10px 18px; background: none; border: none; color: var(--text2);
+    font-size: .88rem; cursor: pointer; white-space: nowrap; border-bottom: 2px solid transparent;
+    transition: color .2s, border-color .2s; margin-bottom: -1px;
+  }
+  .tab-btn.active { color: var(--text); border-bottom-color: var(--green); }
+  .tab-btn:hover:not(.active) { color: var(--text); }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+
+  /* ── Cards / surfaces ── */
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 22px; margin-bottom: 16px;
+  }
+  .card-title { font-size: .85rem; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 16px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .three-col { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
+  @media(max-width:700px) { .two-col,.three-col { grid-template-columns: 1fr; } }
+
+  /* ── Charts ── */
+  .chart-wrap { position: relative; height: 240px; }
+
+  /* ── Tables ── */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  th {
+    padding: 10px 12px; text-align: left; color: var(--text2); font-weight: 500;
+    border-bottom: 1px solid var(--border); white-space: nowrap; cursor: pointer; user-select: none;
+  }
+  th:hover { color: var(--text); }
+  th .sort-arrow { margin-left: 4px; opacity: .4; }
+  td { padding: 9px 12px; border-bottom: 1px solid rgba(31,31,46,.6); white-space: nowrap; }
+  tr.win-row  { background: rgba(0,200,5,.06); }
+  tr.loss-row { background: rgba(255,80,0,.06); }
+  tr.open-row { background: rgba(90,200,250,.06); }
+  .pos-row td:first-child { border-left: 3px solid var(--green); }
+  .tag {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: .75rem; font-weight: 600;
+  }
+  .tag-win  { background: rgba(0,200,5,.15);  color: var(--green); }
+  .tag-loss { background: rgba(255,80,0,.15); color: var(--red); }
+  .tag-open { background: rgba(90,200,250,.15); color: var(--blue); }
+  .pnl-pos { color: var(--green); }
+  .pnl-neg { color: var(--red); }
+
+  /* ── Strategy cards ── */
+  .rule-list { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+  .rule-list li { font-size: .87rem; display: flex; align-items: flex-start; gap: 8px; }
+  .rule-list li .icon { flex-shrink: 0; }
+  .mandatory-label {
+    display: inline-block; background: rgba(245,197,24,.12); color: var(--yellow);
+    font-size: .7rem; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+    text-transform: uppercase; margin-right: 6px;
+  }
+  .risk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 24px; }
+  .risk-row { font-size: .87rem; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .risk-key { color: var(--text2); font-size: .78rem; }
+  .risk-val { font-weight: 600; }
+
+  /* ── Watchlist table ── */
+  .wr-high { color: var(--green); }
+  .wr-mid  { color: var(--yellow); }
+  .wr-low  { color: var(--red); }
+
+  /* ── Learnings ── */
+  .insight-card {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px 20px; text-align: center;
+  }
+  .insight-score { font-size: 1.6rem; font-weight: 700; margin: 6px 0 2px; }
+  .insight-label { font-size: .75rem; color: var(--text2); }
+  .best-setup-card {
+    background: rgba(0,200,5,.07); border: 1px solid rgba(0,200,5,.25);
+    border-radius: 12px; padding: 20px 22px;
+  }
+  .best-setup-card h3 { font-size: 1rem; margin-bottom: 6px; }
+  .insight-bullets { list-style: none; display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .insight-bullets li { font-size: .87rem; display: flex; align-items: center; gap: 8px; }
+  .insight-bullets li::before { content: '→'; color: var(--green); }
+  .accuracy-pct { font-size: 2rem; font-weight: 700; color: var(--blue); }
+  .groq-check { color: var(--green); }
+  .groq-cross { color: var(--red); }
+  .empty-state { text-align: center; padding: 48px 20px; color: var(--text2); font-size: .9rem; }
+  .empty-state .empty-icon { font-size: 2.4rem; margin-bottom: 12px; }
+
+  /* ── Export button ── */
+  .export-btn {
+    float: right; padding: 6px 14px; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); font-size: .78rem; cursor: pointer;
+  }
+  .export-btn:hover { border-color: var(--green); }
+
+  /* ── Market status ── */
+  .mkt-status { font-size: 1.1rem; font-weight: 700; }
+  .mkt-time   { font-size: .8rem; color: var(--text2); margin-top: 4px; }
+
+  /* ── Disconnect ── */
+  #disconnect-btn { display: none; }
+</style>
+</head>
+<body>
+
+<!-- Setup Modal -->
+<div id="setup-modal" style="display:none;">
+  <div class="modal-box">
+    <h2>Connect to Database</h2>
+    <p>Enter your Supabase anon key to load your trading data.<br>It's stored only in your browser.</p>
+    <input id="key-input" type="password" placeholder="Paste your Supabase anon key here" autocomplete="off">
+    <button class="btn-primary" onclick="saveKey()">Connect</button>
+  </div>
+</div>
+
+<!-- Header -->
+<header>
+  <div class="header-left">
+    <div class="status-dot" id="status-dot"></div>
+    <div class="logo">Trading<span>Agent</span></div>
+  </div>
+  <div class="header-right">
+    <span id="countdown">Refreshing in 5:00</span>
+    <button class="btn-sm" onclick="loadData()">↻ Refresh Now</button>
+    <button class="btn-sm" id="disconnect-btn" onclick="disconnect()">Disconnect</button>
+  </div>
+</header>
+<div id="error-banner">⚠ Cannot connect — check your Supabase key</div>
+
+<!-- Main -->
+<main>
+  <!-- Metrics -->
+  <div class="metrics-grid" id="metrics-row">
+    <div class="metric-card"><div class="metric-label">Portfolio Value</div><div class="metric-value" id="m-portfolio">—</div></div>
+    <div class="metric-card"><div class="metric-label">Total P&L</div><div class="metric-value" id="m-pnl">—</div><div class="metric-sub" id="m-pnl-sub"></div></div>
+    <div class="metric-card"><div class="metric-label">Win Rate</div><div class="metric-value" id="m-winrate">—</div><div class="metric-sub" id="m-winrate-sub"></div></div>
+    <div class="metric-card"><div class="metric-label">Total Trades</div><div class="metric-value" id="m-trades">—</div></div>
+    <div class="metric-card"><div class="metric-label">Sharpe Ratio</div><div class="metric-value" id="m-sharpe">—</div></div>
+    <div class="metric-card"><div class="metric-label">Max Drawdown</div><div class="metric-value red" id="m-drawdown">—</div></div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('overview',this)">Overview</button>
+    <button class="tab-btn" onclick="switchTab('positions',this)">Positions</button>
+    <button class="tab-btn" onclick="switchTab('history',this)">History</button>
+    <button class="tab-btn" onclick="switchTab('strategy',this)">Strategy Brain</button>
+    <button class="tab-btn" onclick="switchTab('learnings',this)">Learnings</button>
+  </div>
+
+  <!-- Tab 1: Overview -->
+  <div id="tab-overview" class="tab-pane active">
+    <div class="two-col">
+      <div class="card">
+        <div class="card-title">Equity Curve</div>
+        <div class="chart-wrap"><canvas id="equity-chart"></canvas></div>
+        <div id="equity-empty" class="empty-state" style="display:none;">
+          <div class="empty-icon">📈</div>Not enough data yet
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">P&L — Last 20 Trades</div>
+        <div class="chart-wrap"><canvas id="pnl-chart"></canvas></div>
+        <div id="pnl-empty" class="empty-state" style="display:none;">
+          <div class="empty-icon">📊</div>No closed trades yet
+        </div>
+      </div>
+    </div>
+    <div class="card" style="max-width:280px;">
+      <div class="card-title">Market Status</div>
+      <div class="mkt-status" id="mkt-status-text">—</div>
+      <div class="mkt-time" id="mkt-time-text"></div>
+    </div>
+  </div>
+
+  <!-- Tab 2: Open Positions -->
+  <div id="tab-positions" class="tab-pane">
+    <div class="card">
+      <div class="card-title">Open Positions</div>
+      <div id="positions-empty" class="empty-state" style="display:none;">
+        <div class="empty-icon">🔍</div>
+        No open positions<br><span style="font-size:.8rem;">Agent will open trades when signals align</span>
+      </div>
+      <div class="table-wrap" id="positions-table-wrap">
+        <table id="positions-table">
+          <thead><tr>
+            <th>Symbol</th><th>Entry Price</th><th>Shares</th><th>Score</th>
+            <th>RSI</th><th>ADX</th><th>Groq %</th><th>Reason</th><th>Opened</th>
+          </tr></thead>
+          <tbody id="positions-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 3: History -->
+  <div id="tab-history" class="tab-pane">
+    <div class="card">
+      <div class="card-title">
+        Trade History
+        <button class="export-btn" onclick="exportCSV()">⬇ Export CSV</button>
+      </div>
+      <div id="history-empty" class="empty-state" style="display:none;">
+        <div class="empty-icon">📋</div>No trades yet — agent will start trading when market opens
+      </div>
+      <div class="table-wrap" id="history-table-wrap">
+        <table id="history-table">
+          <thead><tr>
+            <th onclick="sortHistory('created_at')">Date <span class="sort-arrow">↕</span></th>
+            <th onclick="sortHistory('symbol')">Symbol <span class="sort-arrow">↕</span></th>
+            <th onclick="sortHistory('action')">Action <span class="sort-arrow">↕</span></th>
+            <th onclick="sortHistory('price')">Price <span class="sort-arrow">↕</span></th>
+            <th onclick="sortHistory('shares')">Shares <span class="sort-arrow">↕</span></th>
+            <th onclick="sortHistory('pnl')">P&L <span class="sort-arrow">↕</span></th>
+            <th onclick="sortHistory('result')">Result <span class="sort-arrow">↕</span></th>
+            <th onclick="sortHistory('score')">Score <span class="sort-arrow">↕</span></th>
+            <th onclick="sortHistory('groq_conf')">Groq % <span class="sort-arrow">↕</span></th>
+            <th>Reason</th>
+          </tr></thead>
+          <tbody id="history-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 4: Strategy Brain -->
+  <div id="tab-strategy" class="tab-pane">
+    <div class="two-col">
+      <div>
+        <div class="card">
+          <div class="card-title">Current Strategy</div>
+          <div style="font-size:.95rem;font-weight:600;margin-bottom:8px;">Multi-Indicator Momentum</div>
+          <div style="font-size:.82rem;color:var(--text2);">Research-Optimized</div>
+          <div style="margin-top:14px;display:flex;flex-direction:column;gap:6px;">
+            <div style="font-size:.8rem;"><span style="color:var(--text2);">Version:</span> 1.0</div>
+            <div style="font-size:.8rem;"><span style="color:var(--text2);">Last updated:</span> 2026-03-16</div>
+            <div style="font-size:.8rem;"><span style="color:var(--text2);">Broker:</span> Alpaca Paper Trading</div>
+            <div style="font-size:.8rem;"><span style="color:var(--text2);">AI Model:</span> Groq llama-3.3-70b-versatile</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Exit Rules</div>
+          <ul class="rule-list">
+            <li><span class="icon">⚡</span>RSI &gt; 75 (overbought — momentum exhausted)</li>
+            <li><span class="icon">⚡</span>RSI &lt; 40 (sudden reversal)</li>
+            <li><span class="icon">⚡</span>MACD line crosses below Signal (bearish crossover)</li>
+            <li><span class="icon">⚡</span>Price drops below EMA21 (short-term trend broken)</li>
+            <li><span class="icon">⚡</span>Stop-loss hit (ATR × 1.5 below entry)</li>
+            <li><span class="icon">⚡</span>Take-profit hit (ATR × 3.0 above entry)</li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="card-title">Risk Settings</div>
+          <div class="risk-grid">
+            <div class="risk-row"><div class="risk-key">Stop-Loss</div><div class="risk-val">ATR(14) × 1.5 — dynamic</div></div>
+            <div class="risk-row"><div class="risk-key">Take-Profit</div><div class="risk-val">ATR(14) × 3.0 — dynamic</div></div>
+            <div class="risk-row"><div class="risk-key">R:R Ratio</div><div class="risk-val green">2:1 minimum</div></div>
+            <div class="risk-row"><div class="risk-key">Max Positions</div><div class="risk-val">3 simultaneously</div></div>
+            <div class="risk-row"><div class="risk-key">Position Size</div><div class="risk-val">10% of portfolio</div></div>
+            <div class="risk-row"><div class="risk-key">Earnings Skip</div><div class="risk-val">Within 7 days</div></div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <div class="card-title">Entry Rules — Scoring (0–6 pts)</div>
+          <ul class="rule-list" style="margin-bottom:16px;">
+            <li><span class="icon green">✓</span>RSI between 45–70 (momentum zone)</li>
+            <li><span class="icon green">✓</span>MACD line &gt; Signal line (bullish)</li>
+            <li><span class="icon green">✓</span>MACD histogram positive and rising</li>
+            <li><span class="icon green">✓</span>Price &gt; EMA9 AND EMA21 (short-term uptrend)</li>
+            <li><span class="icon green">✓</span>Price &gt; EMA50 (medium-term uptrend)</li>
+            <li><span class="icon green">✓</span>Volume &gt; 1.2× 20-day average</li>
+          </ul>
+          <div style="border-top:1px solid var(--border);padding-top:14px;">
+            <ul class="rule-list">
+              <li><span class="mandatory-label">Mandatory</span>Price &gt; EMA200 (major trend filter)</li>
+              <li><span class="mandatory-label">Mandatory</span>ADX &gt; 20 (trend strength filter)</li>
+              <li><span class="mandatory-label">Mandatory</span>Score ≥ 4 out of 6</li>
+              <li><span class="mandatory-label">Mandatory</span>Groq AI confidence ≥ 65%</li>
+            </ul>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Watchlist Performance</div>
+          <div class="table-wrap">
+            <table id="watchlist-table">
+              <thead><tr>
+                <th>Symbol</th><th>Trades</th><th>Wins</th><th>Win Rate</th><th>Avg P&L</th>
+              </tr></thead>
+              <tbody id="watchlist-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 5: Learnings -->
+  <div id="tab-learnings" class="tab-pane">
+    <div id="learnings-gating" class="empty-state" style="display:none;">
+      <div class="empty-icon">🧠</div>
+      The agent needs more trades to generate insights.<br>
+      <span style="font-size:.8rem;">Check back after a few days of trading.</span>
+    </div>
+    <div id="learnings-content">
+      <!-- Score performance -->
+      <div class="card">
+        <div class="card-title">Performance by Score</div>
+        <div class="three-col" id="score-cards"></div>
+      </div>
+      <!-- Best setup -->
+      <div class="card">
+        <div class="card-title">Best Setup Found</div>
+        <div id="best-setup-content"></div>
+      </div>
+      <!-- Day of week -->
+      <div class="card">
+        <div class="card-title">Day of Week Analysis</div>
+        <div class="chart-wrap" style="height:200px;"><canvas id="dow-chart"></canvas></div>
+        <div id="dow-empty" style="display:none;" class="empty-state"><div class="empty-icon">📅</div>Insufficient data</div>
+      </div>
+      <!-- Groq accuracy -->
+      <div class="card">
+        <div class="card-title">Groq AI Accuracy</div>
+        <div style="display:flex;align-items:center;gap:24px;margin-bottom:16px;">
+          <div><div style="font-size:.75rem;color:var(--text2);">Overall Accuracy</div><div class="accuracy-pct" id="groq-accuracy-pct">—</div></div>
+          <div style="font-size:.82rem;color:var(--text2);" id="groq-accuracy-sub"></div>
+        </div>
+        <div class="table-wrap">
+          <table id="groq-table">
+            <thead><tr><th>Symbol</th><th>Groq Said</th><th>Confidence</th><th>Actual Result</th><th>Correct?</th></tr></thead>
+            <tbody id="groq-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <!-- Auto insights -->
+      <div class="card">
+        <div class="card-title">🤖 Auto Insights</div>
+        <ul class="insight-bullets" id="auto-insights"></ul>
+        <div id="insights-empty" class="empty-state" style="display:none;">
+          <div class="empty-icon">💡</div>Not enough data for insights yet
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+const SUPABASE_URL = 'https://uariazhyestgclqujbfj.supabase.co';
+const WATCHLIST    = ['AAPL','NVDA','TSLA','MSFT','AMZN','META','AMD','GOOGL','NFLX','SPY'];
+
+let allTrades   = [];
+let historySortKey = 'created_at';
+let historySortAsc = false;
+let equityChart = null;
+let pnlChart    = null;
+let dowChart    = null;
+let refreshTimer = null;
+let countdown   = 300;
+
+// ── Key management ────────────────────────────────────────────────────────────
+function getSBKey() { return localStorage.getItem('sb_key'); }
+
+function saveKey() {
+  const k = document.getElementById('key-input').value.trim();
+  if (!k) return;
+  localStorage.setItem('sb_key', k);
+  document.getElementById('setup-modal').style.display = 'none';
+  document.getElementById('disconnect-btn').style.display = 'inline-block';
+  loadData();
+}
+
+function disconnect() {
+  localStorage.removeItem('sb_key');
+  document.getElementById('disconnect-btn').style.display = 'none';
+  document.getElementById('setup-modal').style.display = 'flex';
+  allTrades = [];
+  renderAll([]);
+}
+
+// ── Data fetching ─────────────────────────────────────────────────────────────
+async function loadData() {
+  const key = getSBKey();
+  if (!key) return;
+  document.getElementById('error-banner').style.display = 'none';
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/trades?select=*&order=created_at.desc&limit=200`,
+      { headers: { 'apikey': key, 'Authorization': `Bearer ${key}` } }
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const trades = await res.json();
+    if (!Array.isArray(trades)) throw new Error('Invalid response');
+    allTrades = trades;
+    renderAll(trades);
+  } catch(e) {
+    document.getElementById('error-banner').style.display = 'block';
+    document.getElementById('error-banner').textContent = `⚠ Cannot connect — check your key (${e.message})`;
+  }
+}
+
+// ── Render all ────────────────────────────────────────────────────────────────
+function renderAll(trades) {
+  renderMetrics(trades);
+  renderEquityChart(trades);
+  renderPnlChart(trades);
+  renderMarketStatus();
+  renderPositions(trades);
+  renderHistory(trades);
+  renderWatchlist(trades);
+  renderLearnings(trades);
+}
+
+// ── Metrics ───────────────────────────────────────────────────────────────────
+function renderMetrics(trades) {
+  const closed = trades.filter(t => t.result === 'WIN' || t.result === 'LOSS');
+  const pnlArr = closed.map(t => parseFloat(t.pnl) || 0);
+  const wins   = closed.filter(t => t.result === 'WIN').length;
+
+  // Portfolio
+  const portfolioVal = trades.length ? (parseFloat(trades[0].portfolio) || 0) : 0;
+  document.getElementById('m-portfolio').textContent = portfolioVal
+    ? '$' + portfolioVal.toLocaleString('en-US', {minimumFractionDigits:2,maximumFractionDigits:2})
+    : '—';
+
+  // P&L
+  const totalPnl = pnlArr.reduce((a,b) => a+b, 0);
+  const pnlEl = document.getElementById('m-pnl');
+  pnlEl.textContent = closed.length
+    ? (totalPnl >= 0 ? '+' : '') + '$' + totalPnl.toFixed(2)
+    : '—';
+  pnlEl.className = 'metric-value ' + (totalPnl >= 0 ? 'green' : 'red');
+
+  // Win rate
+  const wr = closed.length ? (wins / closed.length * 100).toFixed(1) : null;
+  document.getElementById('m-winrate').textContent = wr ? wr + '%' : '—';
+  document.getElementById('m-winrate-sub').textContent = closed.length
+    ? `${wins} wins / ${closed.length} trades` : '';
+
+  // Total trades
+  document.getElementById('m-trades').textContent = trades.length || '—';
+
+  // Sharpe
+  if (pnlArr.length >= 5) {
+    const mean = pnlArr.reduce((a,b)=>a+b,0) / pnlArr.length;
+    const variance = pnlArr.reduce((a,b) => a + Math.pow(b-mean,2), 0) / pnlArr.length;
+    const std = Math.sqrt(variance);
+    const sharpe = std > 0 ? ((mean / std) * Math.sqrt(252)).toFixed(2) : 'N/A';
+    const sharpeEl = document.getElementById('m-sharpe');
+    sharpeEl.textContent = sharpe;
+    if (sharpe !== 'N/A') {
+      sharpeEl.className = 'metric-value ' + (parseFloat(sharpe) >= 0 ? 'green' : 'red');
+    }
+  } else {
+    document.getElementById('m-sharpe').textContent = 'N/A';
+    document.getElementById('m-sharpe').className = 'metric-value';
+  }
+
+  // Max drawdown
+  const portfolioByDate = [...trades].reverse().map(t => parseFloat(t.portfolio)||0).filter(v=>v>0);
+  if (portfolioByDate.length >= 2) {
+    let peak = portfolioByDate[0], maxDD = 0;
+    for (const v of portfolioByDate) {
+      if (v > peak) peak = v;
+      const dd = (peak - v) / peak;
+      if (dd > maxDD) maxDD = dd;
+    }
+    document.getElementById('m-drawdown').textContent = '-' + (maxDD * 100).toFixed(1) + '%';
+  } else {
+    document.getElementById('m-drawdown').textContent = '—';
+  }
+}
+
+// ── Equity chart ──────────────────────────────────────────────────────────────
+function renderEquityChart(trades) {
+  const points = [...trades].reverse()
+    .filter(t => t.portfolio)
+    .map(t => ({ x: t.created_at.slice(0,10), y: parseFloat(t.portfolio) }));
+
+  const canvas = document.getElementById('equity-chart');
+  const empty  = document.getElementById('equity-empty');
+  if (points.length < 2) {
+    canvas.style.display = 'none'; empty.style.display = 'block'; return;
+  }
+  canvas.style.display = 'block'; empty.style.display = 'none';
+  if (equityChart) equityChart.destroy();
+  equityChart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: points.map(p => p.x),
+      datasets: [{
+        data: points.map(p => p.y),
+        borderColor: '#00c805',
+        borderWidth: 2,
+        fill: true,
+        backgroundColor: (ctx) => {
+          const g = ctx.chart.ctx.createLinearGradient(0,0,0,ctx.chart.height);
+          g.addColorStop(0,'rgba(0,200,5,.18)');
+          g.addColorStop(1,'rgba(0,200,5,0)');
+          return g;
+        },
+        tension: 0.35,
+        pointRadius: 2,
+        pointHoverRadius: 4,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#8888aa', maxTicksLimit: 8 }, grid: { color: '#1f1f2e' } },
+        y: { ticks: { color: '#8888aa', callback: v => '$'+v.toLocaleString() }, grid: { color: '#1f1f2e' } }
+      }
+    }
+  });
+}
+
+// ── P&L bar chart ─────────────────────────────────────────────────────────────
+function renderPnlChart(trades) {
+  const closed = trades.filter(t => t.result==='WIN'||t.result==='LOSS').slice(0,20).reverse();
+  const canvas = document.getElementById('pnl-chart');
+  const empty  = document.getElementById('pnl-empty');
+  if (!closed.length) {
+    canvas.style.display = 'none'; empty.style.display = 'block'; return;
+  }
+  canvas.style.display = 'block'; empty.style.display = 'none';
+  if (pnlChart) pnlChart.destroy();
+  const labels = closed.map(t => t.symbol + ' ' + (t.created_at||'').slice(5,10));
+  const data   = closed.map(t => parseFloat(t.pnl)||0);
+  const colors = data.map(v => v >= 0 ? 'rgba(0,200,5,.75)' : 'rgba(255,80,0,.75)');
+  pnlChart = new Chart(canvas, {
+    type: 'bar',
+    data: { labels, datasets: [{ data, backgroundColor: colors, borderRadius: 4 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const t = closed[ctx.dataIndex];
+              return [`${t.symbol}`, `P&L: $${(parseFloat(t.pnl)||0).toFixed(2)}`, `Result: ${t.result}`];
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: '#8888aa', maxRotation: 45, font: { size: 10 } }, grid: { color: '#1f1f2e' } },
+        y: { ticks: { color: '#8888aa', callback: v => '$'+v }, grid: { color: '#1f1f2e' } }
+      }
+    }
+  });
+}
+
+// ── Market status ─────────────────────────────────────────────────────────────
+function renderMarketStatus() {
+  const now = new Date();
+  const est = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const h = est.getHours(), m = est.getMinutes(), day = est.getDay();
+  const totalMins = h * 60 + m;
+  const isWeekday = day >= 1 && day <= 5;
+  const statusEl = document.getElementById('mkt-status-text');
+  const timeEl   = document.getElementById('mkt-time-text');
+
+  let label, cls;
+  if (!isWeekday) { label = '🔴 Market Closed (Weekend)'; cls = 'red'; }
+  else if (totalMins >= 570 && totalMins < 960) { label = '🟢 Market Open'; cls = 'green'; }
+  else if (totalMins >= 240 && totalMins < 570) { label = '🟡 Pre-Market'; cls = 'yellow'; }
+  else { label = '🔴 Market Closed'; cls = 'red'; }
+
+  statusEl.textContent = label;
+  statusEl.className   = 'mkt-status ' + cls;
+  timeEl.textContent   = est.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', timeZoneName:'short' });
+  setTimeout(renderMarketStatus, 30000);
+}
+
+// ── Positions ─────────────────────────────────────────────────────────────────
+function renderPositions(trades) {
+  const open   = trades.filter(t => t.result === 'OPEN');
+  const body   = document.getElementById('positions-body');
+  const empty  = document.getElementById('positions-empty');
+  const wrap   = document.getElementById('positions-table-wrap');
+  if (!open.length) { wrap.style.display='none'; empty.style.display='block'; return; }
+  wrap.style.display='block'; empty.style.display='none';
+  body.innerHTML = open.map(t => `
+    <tr class="pos-row">
+      <td><strong>${t.symbol}</strong></td>
+      <td>$${parseFloat(t.price||0).toFixed(2)}</td>
+      <td>${t.shares||'—'}</td>
+      <td>${t.score||'—'}/6</td>
+      <td>${t.rsi ? parseFloat(t.rsi).toFixed(1) : '—'}</td>
+      <td>${t.adx ? parseFloat(t.adx).toFixed(1) : '—'}</td>
+      <td>${t.groq_conf !== null && t.groq_conf !== undefined ? t.groq_conf+'%' : '—'}</td>
+      <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;">${t.reason||'—'}</td>
+      <td>${fmtDate(t.created_at)}</td>
+    </tr>`).join('');
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+function renderHistory(trades) {
+  const body  = document.getElementById('history-body');
+  const empty = document.getElementById('history-empty');
+  const wrap  = document.getElementById('history-table-wrap');
+  if (!trades.length) { wrap.style.display='none'; empty.style.display='block'; return; }
+  wrap.style.display='block'; empty.style.display='none';
+  const sorted = [...trades].sort((a,b) => {
+    let va = a[historySortKey], vb = b[historySortKey];
+    if (va===null||va===undefined) va=''; if (vb===null||vb===undefined) vb='';
+    if (typeof va==='number'&&typeof vb==='number') return historySortAsc ? va-vb : vb-va;
+    return historySortAsc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+  }).slice(0,50);
+  body.innerHTML = sorted.map(t => {
+    const pnl = parseFloat(t.pnl)||0;
+    const rowClass = t.result==='WIN' ? 'win-row' : t.result==='LOSS' ? 'loss-row' : 'open-row';
+    const tagClass = t.result==='WIN' ? 'tag-win' : t.result==='LOSS' ? 'tag-loss' : 'tag-open';
+    const pnlStr = t.pnl !== null && t.pnl !== undefined
+      ? `<span class="${pnl>=0?'pnl-pos':'pnl-neg'}">${pnl>=0?'+':''}$${pnl.toFixed(2)}</span>` : '—';
+    return `<tr class="${rowClass}">
+      <td>${fmtDate(t.created_at)}</td>
+      <td><strong>${t.symbol}</strong></td>
+      <td>${t.action||'—'}</td>
+      <td>$${parseFloat(t.price||0).toFixed(2)}</td>
+      <td>${t.shares||'—'}</td>
+      <td>${pnlStr}</td>
+      <td><span class="tag ${tagClass}">${t.result||'—'}</span></td>
+      <td>${t.score||'—'}/6</td>
+      <td>${t.groq_conf !== null && t.groq_conf !== undefined ? t.groq_conf+'%' : '—'}</td>
+      <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;">${t.reason||'—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function sortHistory(key) {
+  if (historySortKey === key) historySortAsc = !historySortAsc;
+  else { historySortKey = key; historySortAsc = false; }
+  renderHistory(allTrades);
+}
+
+// ── Watchlist ─────────────────────────────────────────────────────────────────
+function renderWatchlist(trades) {
+  const body = document.getElementById('watchlist-body');
+  body.innerHTML = WATCHLIST.map(sym => {
+    const symTrades = trades.filter(t => t.symbol === sym && (t.result==='WIN'||t.result==='LOSS'));
+    if (!symTrades.length) {
+      return `<tr><td><strong>${sym}</strong></td><td>0</td><td>—</td><td style="color:var(--text2);">No data</td><td>—</td></tr>`;
+    }
+    const wins  = symTrades.filter(t => t.result==='WIN').length;
+    const wr    = (wins / symTrades.length * 100).toFixed(0);
+    const avgPnl= (symTrades.reduce((a,t)=>a+(parseFloat(t.pnl)||0),0) / symTrades.length).toFixed(2);
+    const wrCls = wr >= 60 ? 'wr-high' : wr >= 40 ? 'wr-mid' : 'wr-low';
+    return `<tr>
+      <td><strong>${sym}</strong></td>
+      <td>${symTrades.length}</td>
+      <td>${wins}</td>
+      <td class="${wrCls}">${wr}%</td>
+      <td class="${parseFloat(avgPnl)>=0?'pnl-pos':'pnl-neg'}">${parseFloat(avgPnl)>=0?'+':''}$${avgPnl}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Learnings ─────────────────────────────────────────────────────────────────
+function renderLearnings(trades) {
+  const closed = trades.filter(t => t.result==='WIN'||t.result==='LOSS');
+  const gating = document.getElementById('learnings-gating');
+  const content= document.getElementById('learnings-content');
+  if (closed.length < 5) { gating.style.display='block'; content.style.display='none'; return; }
+  gating.style.display='none'; content.style.display='block';
+
+  // Score cards
+  const scoreCards = document.getElementById('score-cards');
+  scoreCards.innerHTML = [4,5,6].map(lvl => {
+    const lt = closed.filter(t => t.score===lvl||parseInt(t.score)===lvl);
+    if (!lt.length) return `<div class="insight-card"><div class="insight-label">Score ${lvl}/6</div><div class="insight-score" style="color:var(--text2);">—</div><div class="insight-label">No trades</div></div>`;
+    const wr = (lt.filter(t=>t.result==='WIN').length / lt.length * 100).toFixed(0);
+    const cls = wr>=60?'green':wr>=40?'yellow':'red';
+    return `<div class="insight-card"><div class="insight-label">Score ${lvl}/6</div><div class="insight-score ${cls}">${wr}%</div><div class="insight-label">${lt.length} trades</div></div>`;
+  }).join('');
+
+  // Best setup
+  const bsContent = document.getElementById('best-setup-content');
+  const symMap = {};
+  for (const sym of WATCHLIST) {
+    const st = closed.filter(t=>t.symbol===sym);
+    if (st.length >= 3) {
+      const wins = st.filter(t=>t.result==='WIN').length;
+      symMap[sym] = { n: st.length, wins, wr: wins/st.length*100 };
+    }
+  }
+  const best = Object.entries(symMap).sort((a,b)=>b[1].wr-a[1].wr)[0];
+  bsContent.innerHTML = best
+    ? `<div class="best-setup-card"><h3>🏆 ${best[0]} — ${best[1].wr.toFixed(0)}% win rate</h3><p style="font-size:.85rem;color:var(--text2);">${best[1].wins} wins out of ${best[1].n} trades</p></div>`
+    : `<div style="color:var(--text2);font-size:.88rem;">Not enough data per symbol yet (need ≥ 3 trades)</div>`;
+
+  // Day of week
+  renderDowChart(closed);
+
+  // Groq accuracy
+  renderGroqAccuracy(closed);
+
+  // Auto insights
+  renderAutoInsights(trades, closed);
+}
+
+function renderDowChart(closed) {
+  const days = ['Mon','Tue','Wed','Thu','Fri'];
+  const dayData = days.map((_, i) => {
+    const dt = closed.filter(t => {
+      const d = new Date(t.created_at);
+      return d.getDay() === i+1;
+    });
+    return { n: dt.length, wins: dt.filter(t=>t.result==='WIN').length };
+  });
+  const hasEnough = dayData.every(d => d.n >= 3);
+  const canvas = document.getElementById('dow-chart');
+  const empty  = document.getElementById('dow-empty');
+  if (!hasEnough && closed.length < 15) {
+    canvas.style.display='none'; empty.style.display='block'; return;
+  }
+  canvas.style.display='block'; empty.style.display='none';
+  if (dowChart) dowChart.destroy();
+  const wrArr = dayData.map(d => d.n ? (d.wins/d.n*100) : 0);
+  const colors = wrArr.map(wr => wr>=60?'rgba(0,200,5,.7)':wr>=40?'rgba(245,197,24,.7)':'rgba(255,80,0,.7)');
+  dowChart = new Chart(canvas, {
+    type: 'bar',
+    data: { labels: days, datasets: [{ data: wrArr, backgroundColor: colors, borderRadius: 4 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => `Win rate: ${ctx.raw.toFixed(1)}%` } } },
+      scales: {
+        x: { ticks: { color: '#8888aa' }, grid: { color: '#1f1f2e' } },
+        y: { min: 0, max: 100, ticks: { color: '#8888aa', callback: v => v+'%' }, grid: { color: '#1f1f2e' } }
+      }
+    }
+  });
+}
+
+function renderGroqAccuracy(closed) {
+  const recent = closed.slice(0,10);
+  const correct = recent.filter(t =>
+    (t.groq_decision==='BUY' && t.result==='WIN') || (t.groq_decision==='SKIP' && t.result==='LOSS')
+  ).length;
+  const acc = recent.length ? (correct/recent.length*100).toFixed(0) : '—';
+  document.getElementById('groq-accuracy-pct').textContent = recent.length ? acc+'%' : '—';
+  document.getElementById('groq-accuracy-sub').textContent = recent.length ? `${correct} correct out of ${recent.length} last trades` : '';
+  const body = document.getElementById('groq-body');
+  body.innerHTML = recent.map(t => {
+    const isCorrect = (t.groq_decision==='BUY'&&t.result==='WIN')||(t.groq_decision==='SKIP'&&t.result==='LOSS');
+    return `<tr>
+      <td><strong>${t.symbol}</strong></td>
+      <td>${t.groq_decision||'—'}</td>
+      <td>${t.groq_conf !== null && t.groq_conf !== undefined ? t.groq_conf+'%' : '—'}</td>
+      <td><span class="tag ${t.result==='WIN'?'tag-win':t.result==='LOSS'?'tag-loss':'tag-open'}">${t.result}</span></td>
+      <td style="font-size:1.1rem;">${isCorrect ? '<span class="groq-check">✓</span>' : '<span class="groq-cross">✗</span>'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderAutoInsights(trades, closed) {
+  const bullets = [];
+  const insightsList = document.getElementById('auto-insights');
+  const insightsEmpty= document.getElementById('insights-empty');
+
+  // Best performing day
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const dayBuckets = {};
+  closed.forEach(t => {
+    const d = new Date(t.created_at).getDay();
+    if (!dayBuckets[d]) dayBuckets[d] = { wins:0, n:0 };
+    dayBuckets[d].n++;
+    if (t.result==='WIN') dayBuckets[d].wins++;
+  });
+  const bestDay = Object.entries(dayBuckets)
+    .filter(([,v]) => v.n >= 3)
+    .sort((a,b) => b[1].wins/b[1].n - a[1].wins/a[1].n)[0];
+  if (bestDay) bullets.push(`Best performing day: <strong>${dayNames[bestDay[0]]}</strong> (${(bestDay[1].wins/bestDay[1].n*100).toFixed(0)}% win rate)`);
+
+  // Recommended min score
+  const scoreWr = [4,5,6].map(s => {
+    const st = closed.filter(t=>parseInt(t.score)===s);
+    return { score: s, wr: st.length ? st.filter(t=>t.result==='WIN').length/st.length*100 : 0, n: st.length };
+  }).filter(s=>s.n>=3);
+  const bestScore = scoreWr.sort((a,b)=>b.wr-a.wr)[0];
+  if (bestScore) bullets.push(`Recommended minimum score: <strong>${bestScore.score}/6</strong> (${bestScore.wr.toFixed(0)}% win rate)`);
+
+  // Best/worst symbol
+  const symPerf = WATCHLIST.map(sym => {
+    const st = closed.filter(t=>t.symbol===sym);
+    return { sym, n: st.length, wr: st.length ? st.filter(t=>t.result==='WIN').length/st.length*100 : 0 };
+  }).filter(s=>s.n>=3);
+  if (symPerf.length) {
+    const bst = symPerf.sort((a,b)=>b.wr-a.wr)[0];
+    const wst = symPerf.sort((a,b)=>a.wr-b.wr)[0];
+    bullets.push(`Best stock: <strong>${bst.sym}</strong> (${bst.wr.toFixed(0)}% win rate, ${bst.n} trades)`);
+    if (wst.sym !== bst.sym) bullets.push(`Worst stock: <strong>${wst.sym}</strong> (${wst.wr.toFixed(0)}% win rate, ${wst.n} trades)`);
+  }
+
+  // Avg hold time
+  const holdTimes = [];
+  const buys = trades.filter(t=>t.action==='BUY');
+  const sells= trades.filter(t=>t.action==='SELL');
+  buys.forEach(b => {
+    const s = sells.find(s => s.symbol===b.symbol && new Date(s.created_at)>new Date(b.created_at));
+    if (s) {
+      const diff = (new Date(s.created_at)-new Date(b.created_at)) / (1000*60*60*24);
+      holdTimes.push(diff);
+    }
+  });
+  if (holdTimes.length >= 3) {
+    const avg = (holdTimes.reduce((a,b)=>a+b,0)/holdTimes.length).toFixed(1);
+    bullets.push(`Average hold time: <strong>${avg} days</strong>`);
+  }
+
+  if (!bullets.length) { insightsList.style.display='none'; insightsEmpty.style.display='block'; return; }
+  insightsList.style.display='flex'; insightsEmpty.style.display='none';
+  insightsList.innerHTML = bullets.map(b=>`<li>${b}</li>`).join('');
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b  => b.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ── Export CSV ────────────────────────────────────────────────────────────────
+function exportCSV() {
+  if (!allTrades.length) return;
+  const cols = ['created_at','symbol','action','price','shares','pnl','result','score','groq_conf','reason','portfolio'];
+  const rows = [cols.join(',')];
+  allTrades.forEach(t => rows.push(cols.map(c => JSON.stringify(t[c]??'')).join(',')));
+  const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'trades_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-US', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+
+// ── Countdown + auto-refresh ──────────────────────────────────────────────────
+function startCountdown() {
+  countdown = 300;
+  clearInterval(refreshTimer);
+  refreshTimer = setInterval(() => {
+    countdown--;
+    const m = Math.floor(countdown/60), s = countdown%60;
+    document.getElementById('countdown').textContent = `Refreshing in ${m}:${String(s).padStart(2,'0')}`;
+    if (countdown <= 0) { loadData(); startCountdown(); }
+  }, 1000);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+(function init() {
+  const key = getSBKey();
+  if (key) {
+    document.getElementById('setup-modal').style.display = 'none';
+    document.getElementById('disconnect-btn').style.display = 'inline-block';
+    loadData();
+  } else {
+    document.getElementById('setup-modal').style.display = 'flex';
+  }
+  renderMarketStatus();
+  startCountdown();
+  // Allow Enter key in modal
+  document.getElementById('key-input').addEventListener('keydown', e => { if (e.key==='Enter') saveKey(); });
+})();
+</script>
+</body>
+</html>
