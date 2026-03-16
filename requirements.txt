@@ -1,0 +1,7 @@
+alpaca-py
+groq
+yfinance
+pandas
+pandas-ta
+requests
+numpy

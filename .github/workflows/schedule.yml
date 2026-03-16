@@ -1,0 +1,32 @@
+name: Trading Agent
+
+on:
+  schedule:
+    # Every 30 min from 9:30 AM to 3:30 PM EST (14:30-20:30 UTC), Mon-Fri
+    - cron: "30 14,15,16,17,18,19,20 * * 1-5"
+  workflow_dispatch:   # allow manual trigger for testing
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run trading agent
+        env:
+          ALPACA_API_KEY:    ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+        run: python agent.py
